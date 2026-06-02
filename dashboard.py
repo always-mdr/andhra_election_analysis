@@ -1,73 +1,49 @@
 import streamlit as st
 import pandas as pd
-from sqlalchemy import create_engine
+import duckdb
 import plotly.express as px
+import os
 
 # --- CONFIGURATION ---
-DB_STR = "postgresql://admin:password@localhost:5432/election_db"
+DB_PATH = "data/election_warehouse.duckdb"
 
 st.set_page_config(page_title="AP Election Analytics", layout="wide")
 st.title("🗳️ AP Assembly: The Complete Analysis (2014-2024)")
 
-# --- 0. REGION MAPPING LOGIC ---
-def get_region(constituency_name):
-    # Rayalaseema Districts (Old)
-    raya_keywords = ['KADAPA', 'KURNOOL', 'ANANTAPUR', 'CHITTOOR', 'TIRUPATI', 'HINDUPUR', 'NANDYAL', 'RAJAMPET', 'ADONI']
-    if any(k in constituency_name for k in raya_keywords):
-        return 'Rayalaseema'
-    return 'Coastal Andhra' # Default
-
 # --- 1. DATA LOADING ---
 @st.cache_data
 def load_data():
-    engine = create_engine(DB_STR)
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__)))
+    full_db_path = os.path.join(project_root, DB_PATH)
     
-    # Load Main Data
-    df = pd.read_sql("SELECT * FROM election_winners", engine)
+    if not os.path.exists(full_db_path):
+        return pd.DataFrame(), pd.DataFrame()
+        
+    conn = duckdb.connect(full_db_path)
     
-    # Load Deep Data (Margins)
     try:
-        deep_df = pd.read_sql("SELECT * FROM election_deep_metrics", engine)
-    except:
-        deep_df = pd.DataFrame()
-
-    # Standardize Names
-    df['constituency'] = df['constituency'].str.upper().str.strip()
-    if not deep_df.empty:
-        deep_df['constituency'] = deep_df['constituency'].str.upper().str.strip()
-
-    # Standardize Parties
-    df['party'] = df['party'].str.upper().str.strip()
-    df['party'] = df['party'].replace({
-        'YSR CONGRESS PARTY': 'YSRCP', 
-        'YUVAJANA SRAMIKA RYTHU CONGRESS PARTY': 'YSRCP', 
-        'TELUGU DESAM': 'TDP',
-        'JANA SENA PARTY': 'JSP',
-        'BHARATIYA JANATA PARTY': 'BJP'
-    })
-    
-    # Add Region Column
-    df['Region'] = df['constituency'].apply(get_region)
+        df = conn.execute("SELECT * FROM mart_election_winners").df()
+        deep_df = conn.execute("SELECT * FROM mart_election_margins").df()
+    except Exception as e:
+        st.error(f"Error querying DuckDB: {e}")
+        df, deep_df = pd.DataFrame(), pd.DataFrame()
+    finally:
+        conn.close()
 
     return df, deep_df
 
-try:
-    df, deep_df = load_data()
-except Exception as e:
-    st.error(f"Database Error: {e}")
+df, deep_df = load_data()
+
+if df.empty:
+    st.warning("No data found! Please run the ETL pipeline: `make run`")
     st.stop()
 
 # --- 2. SIDEBAR YEAR SELECTOR ---
 selected_year = st.sidebar.selectbox("Select Election Year", [2024, 2019, 2014])
 
-# --- 3. FILTER & MERGE ---
+# --- 3. FILTER ---
 curr_df = df[df['year'] == selected_year].copy()
 curr_deep = deep_df[deep_df['year'] == selected_year].copy() if not deep_df.empty else pd.DataFrame()
-
-# Merge Party Info into Margin Data
-if not curr_deep.empty and not curr_df.empty:
-    curr_deep = pd.merge(curr_deep, curr_df[['constituency', 'party', 'Region']], on='constituency', how='inner')
-    curr_deep.rename(columns={'party': 'winner_party'}, inplace=True)
 
 # --- 4. TOP METRICS ---
 col1, col2, col3, col4 = st.columns(4)
@@ -82,7 +58,7 @@ else:
 
 st.divider()
 
-# --- 5. VISUALIZATIONS (RESTORED FEATURES) ---
+# --- 5. VISUALIZATIONS ---
 st.header("📈 Money, Crime & Trends")
 
 c1, c2 = st.columns(2)
@@ -107,7 +83,6 @@ with c1:
 with c2:
     st.subheader("📈 The Cost of Democracy (Trend)")
     st.markdown("Average Assets of Winners (2014-2024)")
-    # Group by year for the line chart
     avg_wealth_yearly = df.groupby('year')['assets_cleaned'].mean().reset_index()
     avg_wealth_yearly['Assets (Cr)'] = avg_wealth_yearly['assets_cleaned'] / 10000000
     
@@ -117,22 +92,22 @@ with c2:
 
 st.divider()
 
-# --- 6. DEEP ANALYSIS (WIKIPEDIA STYLE) ---
+# --- 6. DEEP ANALYSIS ---
 if not curr_deep.empty:
     st.header(f"📊 Deep Analysis: {selected_year}")
     
     # A. REGIONAL PERFORMANCE
     st.subheader("1. Regional Breakdown")
-    c1, c2 = st.columns(2)
+    c1_deep, c2_deep = st.columns(2)
     
-    with c1:
+    with c1_deep:
         st.write("**Coastal vs. Rayalaseema**")
-        region_summary = curr_df.groupby(['Region', 'party']).size().unstack(fill_value=0)
+        region_summary = curr_df.groupby(['region', 'party']).size().unstack(fill_value=0)
         st.table(region_summary)
     
-    with c2:
-        fig_region = px.bar(curr_df.groupby(['Region', 'party']).size().reset_index(name='Seats'), 
-                            x="Region", y="Seats", color="party", barmode="group",
+    with c2_deep:
+        fig_region = px.bar(curr_df.groupby(['region', 'party']).size().reset_index(name='Seats'), 
+                            x="region", y="Seats", color="party", barmode="group",
                             title="Seats by Region")
         st.plotly_chart(fig_region, use_container_width=True)
 
@@ -140,40 +115,33 @@ if not curr_deep.empty:
 
     # B. SEAT SAFETY LEVELS
     st.subheader("2. Victory Safety Levels")
-    def classify_margin(m):
-        if m < 5000: return "1. Marginal (< 5k)"
-        if m < 20000: return "2. Competitive (5k-20k)"
-        if m < 50000: return "3. Safe (20k-50k)"
-        return "4. Landslide (> 50k)"
-
-    curr_deep['Safety'] = curr_deep['margin'].apply(classify_margin)
     
-    c1, c2 = st.columns(2)
-    with c1:
+    c1_safe, c2_safe = st.columns(2)
+    with c1_safe:
         st.write("**Safety Matrix**")
-        safety_table = pd.crosstab(curr_deep['winner_party'], curr_deep['Safety'])
+        safety_table = pd.crosstab(curr_deep['winner_party'], curr_deep['safety_level'])
         st.table(safety_table)
     
-    with c2:
+    with c2_safe:
         fig_safe = px.histogram(curr_deep, x="margin", color="winner_party", nbins=20, title="Margin Distribution")
         st.plotly_chart(fig_safe, use_container_width=True)
 
     # C. CLOSEST & HIGHEST WINS
     st.divider()
-    c1, c2 = st.columns(2)
-    with c1:
+    c1_wins, c2_wins = st.columns(2)
+    with c1_wins:
         st.markdown("##### 🥶 Nail Biters (< 2,000 Votes)")
         close_calls = curr_deep[curr_deep['margin'] < 2000].sort_values('margin')
         st.dataframe(close_calls[['constituency', 'winner', 'winner_party', 'margin']], hide_index=True)
 
-    with c2:
+    with c2_wins:
         st.markdown("##### 🚀 Landslides (> 50,000 Votes)")
         landslides = curr_deep[curr_deep['margin'] > 50000].sort_values('margin', ascending=False)
         st.dataframe(landslides[['constituency', 'winner', 'winner_party', 'margin']], hide_index=True)
 
 st.divider()
 
-# --- 7. SWING ANALYSIS (2019 vs 2024) ---
+# --- 7. SWING ANALYSIS ---
 if selected_year == 2024:
     st.subheader("🔄 The Swing: 2019 vs 2024")
     
@@ -196,15 +164,68 @@ if selected_year == 2024:
 st.divider()
 
 # --- 8. DETAILED SEARCH ---
-st.subheader(f"🔎 Constituency Search ({selected_year})")
-search_term = st.text_input("Search (e.g., Kuppam)", "")
+st.subheader(f"🔎 Deep Constituency Search ({selected_year})")
+search_term = st.text_input("Search for a Constituency (e.g., KUPPAM)", "")
 
-if not curr_deep.empty:
-    display_df = pd.merge(curr_df, curr_deep[['constituency', 'margin', 'Safety']], on='constituency', how='left')
+if search_term and not curr_deep.empty:
+    results = curr_deep[curr_deep['constituency'].str.contains(search_term.upper())]
+    
+    if len(results) > 0:
+        for _, row in results.iterrows():
+            st.markdown(f"### {row['constituency'].title()} ({row['year']})")
+            
+            # Show top 3 candidates
+            c1_cand, c2_cand, c3_cand = st.columns(3)
+            
+            with c1_cand:
+                st.success("🥇 Winner")
+                st.markdown(f"**{row['winner']}** ({row['winner_party']})")
+                st.markdown(f"**Votes:** {row['winner_votes']:,} ({row['winner_percent']}%)")
+                
+            with c2_cand:
+                st.info("🥈 Runner Up")
+                st.markdown(f"**{row['runner_up']}**")
+                st.markdown(f"**Votes:** {row['runner_up_votes']:,} ({row['runner_up_percent']}%)")
+                
+            with c3_cand:
+                st.warning("🥉 Third Place")
+                st.markdown(f"**{row['third_place']}**")
+                st.markdown(f"**Votes:** {row['third_place_votes']:,} ({row['third_place_percent']}%)")
+                
+            # Render a stacked bar chart for this constituency's vote share
+            vote_data = pd.DataFrame({
+                "Candidate": ["Winner", "Runner Up", "Third Place", "Others"],
+                "Party": [row['winner_party'], row['runner_up_party'], row['third_place_party'], 'Other'],
+                "Votes": [
+                    row['winner_votes'], 
+                    row['runner_up_votes'], 
+                    row['third_place_votes'], 
+                    row['total_votes'] - (row['winner_votes'] + row['runner_up_votes'] + row['third_place_votes'])
+                ]
+            })
+            
+            fig_bar = px.bar(
+                vote_data, 
+                x="Votes", 
+                y=["Vote Share"]*4, 
+                color="Candidate", 
+                orientation='h',
+                title=f"Vote Share Distribution in {row['constituency']}",
+                hover_data=["Party", "Votes"],
+                height=250
+            )
+            fig_bar.update_layout(barmode='stack', yaxis_title="")
+            st.plotly_chart(fig_bar, use_container_width=True)
+            st.divider()
+    else:
+        st.write("No matching constituency found.")
+elif search_term and curr_deep.empty:
+    st.write("Deep margin data is not available.")
 else:
-    display_df = curr_df
-
-if search_term:
-    display_df = display_df[display_df['constituency'].str.contains(search_term.upper())]
-
-st.dataframe(display_df, use_container_width=True, hide_index=True)
+    # If no search term, just show the raw table
+    st.write("Enter a constituency name above to see detailed candidate breakdowns.")
+    if not curr_deep.empty:
+        display_df = pd.merge(curr_df, curr_deep[['constituency', 'margin', 'safety_level']], on='constituency', how='left')
+    else:
+        display_df = curr_df
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
