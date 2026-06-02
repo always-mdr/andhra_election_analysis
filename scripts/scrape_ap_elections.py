@@ -111,7 +111,9 @@ def main():
 
     if len(all_data) > 0:
         df = pd.DataFrame(all_data)
-        output_file = "../data/ap_election_history.csv"
+        import os
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+        output_file = os.path.join(project_root, 'data', 'raw', 'ap_election_history.csv')
         df.to_csv(output_file, index=False)
         print(f"\n[SUCCESS] Saved {len(df)} rows to {output_file}")
     else:

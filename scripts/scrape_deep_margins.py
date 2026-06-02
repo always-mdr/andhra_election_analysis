@@ -178,9 +178,11 @@ def main():
 
     if all_data:
         df = pd.DataFrame(all_data)
-        output = "../data/ap_election_margins.csv"
-        df.to_csv(output, index=False)
-        print(f"\n[SUCCESS] Saved {len(df)} records to {output}")
+        import os
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+        output_file = os.path.join(project_root, 'data', 'raw', 'ap_deep_margins.csv')
+        df.to_csv(output_file, index=False)
+        print(f"\n[SUCCESS] Saved {len(df)} records to {output_file}")
     else:
         print("\n[FAILURE] No data found.")
 
