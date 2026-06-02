@@ -164,15 +164,68 @@ if selected_year == 2024:
 st.divider()
 
 # --- 8. DETAILED SEARCH ---
-st.subheader(f"🔎 Constituency Search ({selected_year})")
-search_term = st.text_input("Search (e.g., Kuppam)", "")
+st.subheader(f"🔎 Deep Constituency Search ({selected_year})")
+search_term = st.text_input("Search for a Constituency (e.g., KUPPAM)", "")
 
-if not curr_deep.empty:
-    display_df = pd.merge(curr_df, curr_deep[['constituency', 'margin', 'safety_level']], on='constituency', how='left')
+if search_term and not curr_deep.empty:
+    results = curr_deep[curr_deep['constituency'].str.contains(search_term.upper())]
+    
+    if len(results) > 0:
+        for _, row in results.iterrows():
+            st.markdown(f"### {row['constituency'].title()} ({row['year']})")
+            
+            # Show top 3 candidates
+            c1_cand, c2_cand, c3_cand = st.columns(3)
+            
+            with c1_cand:
+                st.success("🥇 Winner")
+                st.markdown(f"**{row['winner']}** ({row['winner_party']})")
+                st.markdown(f"**Votes:** {row['winner_votes']:,} ({row['winner_percent']}%)")
+                
+            with c2_cand:
+                st.info("🥈 Runner Up")
+                st.markdown(f"**{row['runner_up']}**")
+                st.markdown(f"**Votes:** {row['runner_up_votes']:,} ({row['runner_up_percent']}%)")
+                
+            with c3_cand:
+                st.warning("🥉 Third Place")
+                st.markdown(f"**{row['third_place']}**")
+                st.markdown(f"**Votes:** {row['third_place_votes']:,} ({row['third_place_percent']}%)")
+                
+            # Render a stacked bar chart for this constituency's vote share
+            vote_data = pd.DataFrame({
+                "Candidate": ["Winner", "Runner Up", "Third Place", "Others"],
+                "Party": [row['winner_party'], row['runner_up_party'], row['third_place_party'], 'Other'],
+                "Votes": [
+                    row['winner_votes'], 
+                    row['runner_up_votes'], 
+                    row['third_place_votes'], 
+                    row['total_votes'] - (row['winner_votes'] + row['runner_up_votes'] + row['third_place_votes'])
+                ]
+            })
+            
+            fig_bar = px.bar(
+                vote_data, 
+                x="Votes", 
+                y=["Vote Share"]*4, 
+                color="Candidate", 
+                orientation='h',
+                title=f"Vote Share Distribution in {row['constituency']}",
+                hover_data=["Party", "Votes"],
+                height=250
+            )
+            fig_bar.update_layout(barmode='stack', yaxis_title="")
+            st.plotly_chart(fig_bar, use_container_width=True)
+            st.divider()
+    else:
+        st.write("No matching constituency found.")
+elif search_term and curr_deep.empty:
+    st.write("Deep margin data is not available.")
 else:
-    display_df = curr_df
-
-if search_term:
-    display_df = display_df[display_df['constituency'].str.contains(search_term.upper())]
-
-st.dataframe(display_df, use_container_width=True, hide_index=True)
+    # If no search term, just show the raw table
+    st.write("Enter a constituency name above to see detailed candidate breakdowns.")
+    if not curr_deep.empty:
+        display_df = pd.merge(curr_df, curr_deep[['constituency', 'margin', 'safety_level']], on='constituency', how='left')
+    else:
+        display_df = curr_df
+    st.dataframe(display_df, use_container_width=True, hide_index=True)

@@ -67,18 +67,39 @@ def run_transformations():
                 year::INTEGER AS year,
                 UPPER(TRIM(constituency)) AS constituency,
                 UPPER(TRIM(winner)) AS winner,
+                UPPER(TRIM(winner_party)) AS winner_party,
+                winner_votes::INTEGER AS winner_votes,
+                winner_percent::FLOAT AS winner_percent,
                 UPPER(TRIM(runner_up)) AS runner_up,
-                margin::INTEGER AS margin
+                UPPER(TRIM(runner_up_party)) AS runner_up_party,
+                runner_up_votes::INTEGER AS runner_up_votes,
+                runner_up_percent::FLOAT AS runner_up_percent,
+                UPPER(TRIM(third_place)) AS third_place,
+                UPPER(TRIM(third_place_party)) AS third_place_party,
+                third_place_votes::INTEGER AS third_place_votes,
+                third_place_percent::FLOAT AS third_place_percent,
+                margin::INTEGER AS margin,
+                total_votes::INTEGER AS total_votes
             FROM raw_margins_data
         )
         SELECT
             m.year,
             m.constituency,
-            m.winner,
-            m.runner_up,
-            m.margin,
-            w.party AS winner_party,
             w.region,
+            m.winner,
+            m.winner_party,
+            m.winner_votes,
+            m.winner_percent,
+            m.runner_up,
+            m.runner_up_party,
+            m.runner_up_votes,
+            m.runner_up_percent,
+            m.third_place,
+            m.third_place_party,
+            m.third_place_votes,
+            m.third_place_percent,
+            m.total_votes,
+            m.margin,
             CASE
                 WHEN m.margin < 5000 THEN '1. Marginal (< 5k)'
                 WHEN m.margin < 20000 THEN '2. Competitive (5k-20k)'
@@ -96,8 +117,11 @@ def run_transformations():
         # Create empty table
         conn.execute("""
         CREATE OR REPLACE TABLE mart_election_margins (
-            year INTEGER, constituency VARCHAR, winner VARCHAR, runner_up VARCHAR,
-            margin INTEGER, winner_party VARCHAR, region VARCHAR, safety_level VARCHAR
+            year INTEGER, constituency VARCHAR, region VARCHAR,
+            winner VARCHAR, winner_party VARCHAR, winner_votes INTEGER, winner_percent FLOAT,
+            runner_up VARCHAR, runner_up_party VARCHAR, runner_up_votes INTEGER, runner_up_percent FLOAT,
+            third_place VARCHAR, third_place_party VARCHAR, third_place_votes INTEGER, third_place_percent FLOAT,
+            total_votes INTEGER, margin INTEGER, safety_level VARCHAR
         )
         """)
         
